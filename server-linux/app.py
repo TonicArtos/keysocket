@@ -1,5 +1,9 @@
 #! /usr/bin/python
 import gtk
+import gobject
+import dbus
+import dbus.service
+import dbus.mainloop.glib
 
 from pyxhook import HookManager
 
@@ -10,15 +14,19 @@ from autobahn.websocket import WebSocketServerFactory, WebSocketServerProtocol, 
 
 '''
 KeySocket Linux Server
-@author geekingreen
+@author geekingreen, Tonic Artos
 '''
 
 PORT = 1337
 
 # 171 = Prev, 172 = Play/Pause, 173 = Next, 174 = Stop
 keys = [171, 172, 173, 174]
+# Convert media keys for client
+media_key_map = { 'Previous':'20', 'Play':'16', 'Next':'19', 'Stop':'16' }
+
 # Convert local keys to what the client is expecting
 key_map = { '171': '19', '172': '16', '173': '20', '174': '16' }
+
 
 class KeySocketServerProtocol(WebSocketServerProtocol):
     """
@@ -39,10 +47,8 @@ class KeySocketServerFactory(WebSocketServerFactory):
     clients = []
 
     def broadcast(self, msg):
-        print "broadcasting key '%s' .." % msg
         for client in self.clients:
             client.sendMessage(msg)
-            print "message sent to " + client.peerstr
 
 class KeySocket:
     """
@@ -50,10 +56,17 @@ class KeySocket:
     starts the server.
     """
     def __init__(self):
-        self.hm = HookManager()
-        self.hm.HookKeyboard()
-        self.hm.KeyUp = self.key_press
-        self.hm.start() 
+	# set up the glib main loop.
+	dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+	bus = dbus.Bus(dbus.Bus.TYPE_SESSION)
+	bus_object = bus.get_object('org.gnome.SettingsDaemon', '/org/gnome/SettingsDaemon/MediaKeys')
+
+	# this is what gives us the multi media keys.
+	dbus_interface='org.gnome.SettingsDaemon.MediaKeys'
+	bus_object.GrabMediaPlayerKeys("MediaKeySocketServer", 0, dbus_interface=dbus_interface)
+
+	# connect_to_signal registers our callback function.
+	bus_object.connect_to_signal('MediaPlayerKeyPressed', self.on_mediakey)
 
         self.statusicon = gtk.StatusIcon()
         self.statusicon.set_from_file('icon48.png')
@@ -66,15 +79,14 @@ class KeySocket:
         reactor.run()
 
     def main_quit(self, widget):
-        self.hm.cancel()
-        gtk.main_quit()
+#        self.hm.cancel()
+	gtk.main_quit()
         reactor.stop()
 
-    def key_press (self, event):
-            if event.ScanCode in keys:
-                for client in self.factory.clients:
-                    self.factory.broadcast(key_map[str(event.ScanCode)])
-
+    def on_mediakey(self, comes_from, what):
+	if what in ['Stop','Play','Next','Previous']:
+		self.factory.broadcast(media_key_map[what])
+    
     def right_click_event(self, icon, button, time):
         menu = gtk.Menu()
 
@@ -88,4 +100,5 @@ class KeySocket:
 
         menu.popup(None, None, gtk.status_icon_position_menu, button, time, self.statusicon)
 
-KeySocket()
+ks = KeySocket()
+gtk.main()
